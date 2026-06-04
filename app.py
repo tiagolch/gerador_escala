@@ -24,11 +24,14 @@ def obter_domingos(mes, ano):
 def exportar_excel_completo(dados_escala, contagem_escalados, lista_texto_final, horarios_labels):
     wb = Workbook()
     
+    # --- ABA 1: ESCALA VISUAL ---
     ws_escala = wb.active
     ws_escala.title = "Escala"
     ws_escala.views.sheetView[0].showGridLines = True
 
-    ws_escala.merge_cells("A1:D1")
+    # Título Principal (Mesclando baseado no número dinâmico de colunas)
+    total_colunas = len(horarios_labels) + 1
+    ws_escala.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_colunas)
     ws_escala["A1"] = "ESCALA DE VOLUNTÁRIOS"
     ws_escala["A1"].font = Font(name="Calibri", size=18, bold=True, color="2E7D32")
     ws_escala["A1"].alignment = Alignment(horizontal="center", vertical="center")
@@ -41,7 +44,7 @@ def exportar_excel_completo(dados_escala, contagem_escalados, lista_texto_final,
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     center_align = Alignment(horizontal="center", vertical="center")
 
-    for col_num in range(1, 5):
+    for col_num in range(1, total_colunas + 1):
         cell = ws_escala.cell(row=3, column=col_num)
         cell.fill = header_fill
         cell.font = header_font
@@ -55,17 +58,18 @@ def exportar_excel_completo(dados_escala, contagem_escalados, lista_texto_final,
 
     for i, row_data in enumerate(dados_escala):
         row_num = i + 4
-        ws_escala.append([
-            row_data["DATA"],
-            row_data["9:30h"],
-            row_data["11:30h"],
-            row_data["17:30h"]
-        ])
+        
+        # Monta a linha dinamicamente de acordo com as colunas ativas
+        linha_excel = [row_data["DATA"]]
+        for h in horarios_labels:
+            linha_excel.append(row_data.get(h, "VAGO"))
+            
+        ws_escala.append(linha_excel)
 
         bg_color = "FFFFFF" if i % 2 == 0 else "F9F9F9"
         row_fill = PatternFill(start_color=bg_color, end_color=bg_color, fill_type="solid")
 
-        for col_num in range(1, 5):
+        for col_num in range(1, total_colunas + 1):
             cell = ws_escala.cell(row=row_num, column=col_num)
             cell.fill = row_fill
             cell.alignment = center_align
@@ -82,14 +86,17 @@ def exportar_excel_completo(dados_escala, contagem_escalados, lista_texto_final,
             elif "⚠️" in val_str:
                 cell.font = aviso_font
 
+    # Ajusta larguras das colunas dinamicamente
     ws_escala.column_dimensions["A"].width = 18
-    ws_escala.column_dimensions["B"].width = 35
-    ws_escala.column_dimensions["C"].width = 35
-    ws_escala.column_dimensions["D"].width = 35
+    for col_idx in range(2, total_colunas + 1):
+        letra_coluna = chr(64 + col_idx) if col_idx <= 26 else "B" # Fallback simples
+        ws_escala.column_dimensions[letra_coluna].width = 35
+        
     ws_escala.row_dimensions[1].height = 40
     for r in range(3, ws_escala.max_row + 1):
         ws_escala.row_dimensions[r].height = 25
 
+    # --- ABA 2: RESUMO E ESTATÍSTICAS ---
     ws_resumo = wb.create_sheet(title="Resumo e Estatísticas")
     ws_resumo.views.sheetView[0].showGridLines = True
     
@@ -133,22 +140,19 @@ def exportar_excel_completo(dados_escala, contagem_escalados, lista_texto_final,
         for c in range(4, 8):
             ws_resumo.cell(row=r, column=c).border = border_style
 
-    ws_resumo.column_dimensions["D"].width = 20
-    ws_resumo.column_dimensions["E"].width = 20
-    ws_resumo.column_dimensions["F"].width = 20
-    ws_resumo.column_dimensions["G"].width = 20
-
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
     return output
 
 
+# --- CONFIGURAÇÃO DA INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Gerador Avançado de Escala", page_icon="🗓️", layout="wide")
 
-st.title("🗓️ Gerador de Escala Profissional")
-st.markdown("Insira as restrições por parênteses para definir metas exatas por pessoa (ex: `Nome(3)`).")
+st.title("🗓️ Gerador de Escala Dinâmico")
+st.markdown("Gerencie voluntários, crie ou altere horários de reuniões livres na barra lateral e monte metas sob medida.")
 
+# Inicialização do Session State
 if "dados_escala" not in st.session_state:
     st.session_state.dados_escala = None
 if "contagem_escalados" not in st.session_state:
@@ -156,6 +160,11 @@ if "contagem_escalados" not in st.session_state:
 if "lista_texto_final" not in st.session_state:
     st.session_state.lista_texto_final = None
 
+# --- GERENCIAMENTO DINÂMICO DE HORÁRIOS ---
+if "lista_horarios" not in st.session_state:
+    st.session_state.lista_horarios = ["9:30h", "11:30h", "17:30h"]
+
+# Sidebar - Configurações Iniciais
 st.sidebar.header("🛠️ 1. Configurações Iniciais")
 
 nomes_input = st.sidebar.text_area(
@@ -164,6 +173,7 @@ nomes_input = st.sidebar.text_area(
     help="Adicione (X) ao lado do nome para forçar o voluntário a servir X vezes no mês."
 )
 
+# Processamento de voluntários
 lista_voluntarios = []
 limites_voluntarios = {}
 tem_limite_definido = {}
@@ -182,8 +192,43 @@ for item in itens_nomes:
         limites_voluntarios[item] = 999
         tem_limite_definido[item] = False
 
+# Painel de Edição de Horários na Barra Lateral
 st.sidebar.markdown("---")
-st.sidebar.header("📅 2. Período da Escala")
+st.sidebar.header("⏰ 2. Configurar Horários")
+
+# 1. Adicionar Horário
+novo_horario = st.sidebar.text_input("Adicionar novo horário:", placeholder="ex: 19:00h")
+if st.sidebar.button("➕ Adicionar"):
+    if novo_horario and novo_horario.strip() not in st.session_state.lista_horarios:
+        st.session_state.lista_horarios.append(novo_horario.strip())
+        st.toast(f"Horário {novo_horario} adicionado!")
+        st.rerun()
+
+# 2. Remover ou Editar da Lista Existente
+st.sidebar.markdown("**Horários Ativos atualmente:**")
+horarios_remover = []
+
+# Exibe os horários atuais como editores rápidos de texto ou remoção
+for idx, h_atual in enumerate(st.session_state.lista_horarios):
+    col_h_txt, col_h_del = st.sidebar.columns([4, 1])
+    with col_h_txt:
+        # Permite edição direta do texto do horário
+        texto_editado = st.text_input(f"Editar #{idx+1}", value=h_atual, key=f"edit_h_{idx}", label_visibility="collapsed")
+        if texto_editado != h_atual and texto_editado.strip():
+            st.session_state.lista_horarios[idx] = texto_editado.strip()
+            st.rerun()
+    with col_h_del:
+        if st.button("🗑️", key=f"del_h_{idx}"):
+            horarios_remover.append(h_atual)
+
+if horarios_remover:
+    st.session_state.lista_horarios = [h for h in st.session_state.lista_horarios if h not in horarios_remover]
+    st.rerun()
+
+
+# --- CONFIGURAÇÃO DE PERÍODOS ---
+st.sidebar.markdown("---")
+st.sidebar.header("📅 3. Período da Escala")
 
 meses_nomes = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -207,17 +252,30 @@ for d in domingos_do_mes:
         datas_finais.append(d['data_str'])
 
 
+# --- CORPO PRINCIPAL: AJUSTE DE METAS INDIVIDUAIS ---
 st.subheader("👥 Ajustar Meta de Voluntários por Reunião")
-horarios_labels = ["9:30h", "11:30h", "17:30h"]
+st.markdown("Defina abaixo o número necessário de pessoas. As colunas mudam se você alterar os horários na barra lateral.")
 
-if datas_finais:
-    dados_metas_padrao = [{"DATA": data, "9:30h": 1, "11:30h": 1, "17:30h": 1} for data in datas_finais]
+horarios_labels = st.session_state.lista_horarios
+
+if not horarios_labels:
+    st.warning("⚠️ Adicione pelo menos um horário na barra lateral para estruturar a escala!")
+elif datas_finais:
+    # Cria os dados base dinamicamente com base nos horários ativos
+    dados_metas_padrao = []
+    for data in datas_finais:
+        linha_meta = {"DATA": data}
+        for h in horarios_labels:
+            linha_meta[h] = 1 # Valor padrão de 1 voluntário por horário
+        dados_metas_padrao.append(linha_meta)
+        
     df_metas_inicial = pd.DataFrame(dados_metas_padrao)
     df_metas_editado = st.data_editor(df_metas_inicial, disabled=["DATA"], hide_index=True, use_container_width=True)
 else:
     st.info("💡 Escolha os domingos na barra lateral para abrir a tabela de metas por horário.")
 
 
+# --- PROCESSAMENTO DO SORTEIO ---
 st.markdown("---")
 col_btn1, col_btn2 = st.columns([1, 5])
 
@@ -236,6 +294,8 @@ if gerar_clicado:
         st.error("❌ Erro: Insira pelo menos o nome de um voluntário na barra lateral!")
     elif not datas_finais:
         st.error("❌ Erro: Selecione pelo menos um domingo na barra lateral!")
+    elif not horarios_labels:
+        st.error("❌ Erro: Configure ao menos um horário de reunião na barra lateral!")
     else:
         contagem_escalados = {nome: 0 for nome in lista_voluntarios}
         dados_escala = []
@@ -248,13 +308,14 @@ if gerar_clicado:
 
         dict_metas = df_metas_editado.set_index("DATA").to_dict(orient="index")
 
+        # Algoritmo de dupla esteira com colunas totalmente dinâmicas
         for data_evento in datas_finais:
             row_escala = {"DATA": data_evento}
             lista_texto_final.append(f"📅 DATA: {data_evento}")
 
             for horario in horarios_labels:
                 escolhidos_do_horario = []
-                qtd_vagas_do_horario = int(dict_metas[data_evento][horario])
+                qtd_vagas_do_horario = int(dict_metas[data_evento].get(horario, 0))
 
                 for _ in range(qtd_vagas_do_horario):
                     validos = [
@@ -296,6 +357,7 @@ if gerar_clicado:
         st.session_state.lista_texto_final = lista_texto_final
 
 
+# --- RENDERIZAÇÃO DO RESULTADO ---
 if st.session_state.dados_escala is not None:
     st.success(f"🎉 Escala de {mes_selecionado_nome} calculada com sucesso!")
     col1, col2 = st.columns([2, 1])
